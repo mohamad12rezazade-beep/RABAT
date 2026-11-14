@@ -7,11 +7,7 @@ import asyncio
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -27,14 +23,17 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-if not BOT_TOKEN or not DATABASE_URL:
-    raise RuntimeError("BOT_TOKEN یا DATABASE_URL تنظیم نشده است")
-
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s %(levelname)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN تنظیم نشده است")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL تنظیم نشده است")
 
 CHANNEL = "channel"
 POST = "post"
@@ -51,14 +50,14 @@ def get_db():
     return psycopg2.connect(
         DATABASE_URL,
         cursor_factory=RealDictCursor,
-        connect_timeout=15
+        connect_timeout=15,
+        sslmode="require"
     )
 
 
 def init_db():
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     telegram_id BIGINT PRIMARY KEY,
@@ -83,7 +82,6 @@ def init_db():
                 )
             """)
 
-            # سازگاری با نسخه‌های قبلی دیتابیس
             cur.execute("""
                 ALTER TABLE creations
                 ADD COLUMN IF NOT EXISTS photo_file_id TEXT
@@ -99,9 +97,7 @@ def save_user(user):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO users (
-                    telegram_id, username, first_name
-                )
+                INSERT INTO users (telegram_id, username, first_name)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (telegram_id)
                 DO UPDATE SET
@@ -114,42 +110,22 @@ def save_user(user):
             ))
 
 
-def save_creation(
-    uid,
-    channel_id,
-    title,
-    post,
-    photo,
-    url,
-    button_text,
-    message_id
-):
+def save_creation(uid, channel_id, title, post, photo,
+                  url, button_text, message_id):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO creations (
-                    telegram_id,
-                    channel_id,
-                    channel_title,
-                    post_text,
-                    photo_file_id,
-                    button_url,
-                    button_text,
-                    message_id
+                    telegram_id, channel_id, channel_title,
+                    post_text, photo_file_id, button_url,
+                    button_text, message_id
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                uid,
-                str(channel_id),
-                title,
-                post,
-                photo,
-                url,
-                button_text,
-                message_id
+                uid, str(channel_id), title, post,
+                photo, url, button_text, message_id
             ))
-
             return cur.fetchone()["id"]
 
 
@@ -163,18 +139,13 @@ def get_user_count():
 def get_user_posts(uid, page=0):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 SELECT *
                 FROM creations
                 WHERE telegram_id = %s
                 ORDER BY id DESC
                 LIMIT %s OFFSET %s
-            """, (
-                uid,
-                PAGE_SIZE,
-                page * PAGE_SIZE
-            ))
+            """, (uid, PAGE_SIZE, page * PAGE_SIZE))
 
             posts = cur.fetchall()
 
@@ -185,7 +156,6 @@ def get_user_posts(uid, page=0):
             """, (uid,))
 
             total = cur.fetchone()["total"]
-
             return posts, total
 
 
@@ -197,7 +167,6 @@ def get_post(uid, post_id):
                 FROM creations
                 WHERE id = %s AND telegram_id = %s
             """, (post_id, uid))
-
             return cur.fetchone()
 
 
@@ -209,7 +178,6 @@ def delete_post_record(uid, post_id):
                 WHERE id = %s AND telegram_id = %s
                 RETURNING id
             """, (post_id, uid))
-
             return cur.fetchone() is not None
 
 
@@ -217,35 +185,15 @@ def delete_post_record(uid, post_id):
 
 def main_keyboard():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "🔘 ساخت دکمه شیشه‌ای",
-                callback_data="create"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🗑 حذف پست",
-                callback_data="delete_list"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "👤 کاربر",
-                callback_data="user"
-            )
-        ]
+        [InlineKeyboardButton("🔘 ساخت دکمه شیشه‌ای", callback_data="create")],
+        [InlineKeyboardButton("🗑 حذف پست", callback_data="delete_list")],
+        [InlineKeyboardButton("👤 کاربر", callback_data="user")]
     ])
 
 
 def back_keyboard():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "↩️ بازگشت به منو",
-                callback_data="home"
-            )
-        ]
+        [InlineKeyboardButton("↩️ بازگشت به منو", callback_data="home")]
     ])
 
 
@@ -258,9 +206,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await asyncio.to_thread(save_user, user)
     except Exception:
-        logger.exception("Save user failed")
+        logger.exception("Saving user failed")
 
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "سلام 👋\n\n"
         "به ربات ساخت دکمه شیشه‌ای خوش اومدی.\n"
         "یکی از گزینه‌های زیر رو انتخاب کن:",
@@ -268,13 +216,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ================= CANCEL =================
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user_steps.pop(uid, None)
 
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "❌ عملیات لغو شد.",
         reply_markup=main_keyboard()
     )
@@ -283,11 +229,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= POSTS LIST =================
 
 async def show_posts(query, uid, page=0):
-    posts, total = await asyncio.to_thread(
-        get_user_posts,
-        uid,
-        page
-    )
+    posts, total = await asyncio.to_thread(get_user_posts, uid, page)
 
     if not posts:
         await query.message.reply_text(
@@ -299,11 +241,10 @@ async def show_posts(query, uid, page=0):
     keyboard = []
 
     for post in posts:
-        title = post["channel_title"] or "کانال"
-
+        title = (post["channel_title"] or "کانال")[:25]
         keyboard.append([
             InlineKeyboardButton(
-                f"🗑 پست {post['id']} | {title[:25]}",
+                f"🗑 پست {post['id']} | {title}",
                 callback_data=f"delask:{post['id']}"
             )
         ])
@@ -312,35 +253,26 @@ async def show_posts(query, uid, page=0):
 
     if page > 0:
         navigation.append(
-            InlineKeyboardButton(
-                "⬅️ قبلی",
-                callback_data=f"list:{page - 1}"
-            )
+            InlineKeyboardButton("⬅️ قبلی", callback_data=f"list:{page-1}")
         )
 
     if (page + 1) * PAGE_SIZE < total:
         navigation.append(
-            InlineKeyboardButton(
-                "بعدی ➡️",
-                callback_data=f"list:{page + 1}"
-            )
+            InlineKeyboardButton("بعدی ➡️", callback_data=f"list:{page+1}")
         )
 
     if navigation:
         keyboard.append(navigation)
 
     keyboard.append([
-        InlineKeyboardButton(
-            "🏠 منوی اصلی",
-            callback_data="home"
-        )
+        InlineKeyboardButton("🏠 منوی اصلی", callback_data="home")
     ])
 
     await query.message.reply_text(
-        f"🗑 مدیریت پست‌های شما\n\n"
-        f"تعداد کل پست‌ها: {total}\n"
+        f"🗑 پست‌های شما\n\n"
+        f"تعداد کل: {total}\n"
         f"صفحه: {page + 1}\n\n"
-        f"برای حذف یک پست، دکمه مربوط به آن را بزن:",
+        f"برای حذف پست روی دکمه آن بزن:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -356,7 +288,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "home":
         user_steps.pop(uid, None)
-
         await query.message.reply_text(
             "🏠 منوی اصلی:",
             reply_markup=main_keyboard()
@@ -364,11 +295,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "create":
         user_steps[uid] = {"step": CHANNEL}
-
         await query.message.reply_text(
             "🔗 لینک عمومی کانال رو بفرست.\n\n"
             "مثال: @MyChannel\n\n"
-            "شما و بات باید در کانال ادمین باشید.",
+            "شما و بات باید ادمین کانال باشید.",
             reply_markup=back_keyboard()
         )
 
@@ -380,12 +310,11 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             count = "نامشخص"
 
         user = query.from_user
-
         await query.message.reply_text(
             f"👤 اطلاعات شما\n\n"
             f"آیدی: {uid}\n"
             f"نام: {user.first_name}\n"
-            f"یوزرنیم: @{user.username or 'ندارد'}\n\n"
+            f"یوزرنیم: @{user.username or 'ندارد'}\n"
             f"👥 تعداد کاربران: {count}",
             reply_markup=main_keyboard()
         )
@@ -396,11 +325,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("list:"):
         try:
             page = int(data.split(":")[1])
-            if page < 0:
-                return
-            await show_posts(query, uid, page)
+            if page >= 0:
+                await show_posts(query, uid, page)
         except (ValueError, IndexError):
-            await query.message.reply_text("❌ صفحه نامعتبر است.")
+            await query.message.reply_text("صفحه نامعتبر است.")
 
     elif data.startswith("delask:"):
         try:
@@ -408,38 +336,30 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, IndexError):
             return
 
-        post = await asyncio.to_thread(
-            get_post,
-            uid,
-            post_id
-        )
+        post = await asyncio.to_thread(get_post, uid, post_id)
 
         if not post:
             await query.message.reply_text(
-                "❌ این پست پیدا نشد یا متعلق به شما نیست."
+                "❌ پست پیدا نشد یا متعلق به شما نیست."
             )
             return
 
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "✅ بله، حذف کن",
-                    callback_data=f"delconfirm:{post_id}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "❌ انصراف",
-                    callback_data="delete_list"
-                )
-            ]
+            [InlineKeyboardButton(
+                "✅ بله، حذف کن",
+                callback_data=f"delconfirm:{post_id}"
+            )],
+            [InlineKeyboardButton(
+                "❌ انصراف",
+                callback_data="delete_list"
+            )]
         ])
 
         await query.message.reply_text(
-            f"⚠️ تأیید حذف پست\n\n"
+            f"⚠️ تأیید حذف\n\n"
             f"کانال: {post['channel_title'] or 'نامشخص'}\n"
             f"شناسه پست: {post_id}\n\n"
-            f"آیا می‌خوای این پست از کانال حذف بشه؟",
+            f"این پست از کانال حذف شود؟",
             reply_markup=keyboard
         )
 
@@ -449,16 +369,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, IndexError):
             return
 
-        post = await asyncio.to_thread(
-            get_post,
-            uid,
-            post_id
-        )
+        post = await asyncio.to_thread(get_post, uid, post_id)
 
         if not post:
-            await query.message.reply_text(
-                "❌ پست پیدا نشد یا قبلاً حذف شده است."
-            )
+            await query.message.reply_text("❌ پست پیدا نشد.")
             return
 
         try:
@@ -472,15 +386,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if bot_member.status != "creator":
                 if (
                     bot_member.status != "administrator"
-                    or not getattr(
-                        bot_member,
-                        "can_delete_messages",
-                        False
-                    )
+                    or not getattr(bot_member, "can_delete_messages", False)
                 ):
                     await query.message.reply_text(
-                        "❌ بات اجازه حذف پیام در این کانال رو نداره.\n"
-                        "دسترسی حذف پیام رو به بات بده."
+                        "❌ بات دسترسی حذف پیام در کانال رو نداره."
                     )
                     return
 
@@ -489,26 +398,17 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_id=post["message_id"]
             )
 
-            await asyncio.to_thread(
-                delete_post_record,
-                uid,
-                post_id
-            )
+            await asyncio.to_thread(delete_post_record, uid, post_id)
 
             await query.message.reply_text(
-                "✅ پست با موفقیت از کانال حذف شد.",
+                "✅ پست از کانال حذف شد.",
                 reply_markup=main_keyboard()
             )
 
         except Exception:
-            logger.exception("Delete message failed")
-
+            logger.exception("Delete post failed")
             await query.message.reply_text(
-                "❌ حذف پست انجام نشد.\n\n"
-                "موارد زیر رو بررسی کن:\n"
-                "۱. بات هنوز ادمین کانال باشه.\n"
-                "۲. دسترسی حذف پیام داشته باشه.\n"
-                "۳. پیام قبلاً حذف نشده باشه."
+                "❌ حذف انجام نشد. دسترسی Delete Messages بات رو بررسی کن."
             )
 
 
@@ -533,10 +433,7 @@ def parse_channel(value):
 
 # ================= MESSAGE HANDLER =================
 
-async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
 
@@ -545,35 +442,25 @@ async def handle_message(
 
     state = user_steps[uid]
     step = state["step"]
-    message = update.message
-
+    message = update.effective_message
     text = message.text.strip() if message.text else ""
 
-    # -------- STEP 1: CHANNEL --------
-
+    # STEP 1: CHANNEL
     if step == CHANNEL:
-
         channel = parse_channel(text)
 
         if not channel:
             await message.reply_text(
-                "❌ لینک کانال معتبر نیست.\n"
-                "مثال: @MyChannel"
+                "❌ لینک معتبر نیست.\nمثال: @MyChannel"
             )
             return
 
         try:
             chat = await context.bot.get_chat(channel)
-
-            member = await context.bot.get_chat_member(
-                chat.id,
-                uid
-            )
+            member = await context.bot.get_chat_member(chat.id, uid)
 
             if member.status not in ("administrator", "creator"):
-                await message.reply_text(
-                    "❌ شما باید ادمین کانال باشید."
-                )
+                await message.reply_text("❌ شما باید ادمین کانال باشید.")
                 return
 
             bot_member = await context.bot.get_chat_member(
@@ -582,15 +469,13 @@ async def handle_message(
             )
 
             if bot_member.status not in ("administrator", "creator"):
-                await message.reply_text(
-                    "❌ بات باید ادمین کانال باشد."
-                )
+                await message.reply_text("❌ بات باید ادمین کانال باشد.")
                 return
 
             if bot_member.status == "administrator":
                 if not getattr(bot_member, "can_post_messages", False):
                     await message.reply_text(
-                        "❌ بات اجازه ارسال پست ندارد."
+                        "❌ بات دسترسی ارسال پست ندارد."
                     )
                     return
 
@@ -600,57 +485,44 @@ async def handle_message(
 
             await message.reply_text(
                 "✅ کانال تأیید شد.\n\n"
-                "📸 حالا عکس همراه کپشن یا فقط متن پست رو بفرست."
+                "📸 عکس همراه کپشن یا فقط متن پست رو بفرست."
             )
 
         except Exception:
-            logger.exception("Channel validation failed")
-
+            logger.exception("Channel check failed")
             await message.reply_text(
-                "❌ بررسی کانال ناموفق بود.\n"
-                "آیدی کانال و دسترسی بات رو بررسی کن."
+                "❌ بررسی کانال ناموفق بود. دسترسی بات رو بررسی کن."
             )
 
-    # -------- STEP 2: POST --------
-
+    # STEP 2: PHOTO OR TEXT
     elif step == POST:
-
         if message.photo:
             state["photo_id"] = message.photo[-1].file_id
             state["post_text"] = message.caption or ""
 
         elif message.text:
             state["photo_id"] = None
-            state["post_text"] = message.text.strip()
+            state["post_text"] = text
 
-            if not state["post_text"]:
-                await message.reply_text(
-                    "❌ متن پست نمی‌تونه خالی باشه."
-                )
+            if not text:
+                await message.reply_text("متن پست خالی است.")
                 return
 
         else:
-            await message.reply_text(
-                "❌ لطفاً عکس یا متن ارسال کن."
-            )
+            await message.reply_text("لطفاً عکس یا متن بفرست.")
             return
 
         state["step"] = BUTTON_URL
-
         await message.reply_text(
-            "✅ محتوای پست دریافت شد.\n\n"
-            "🔗 حالا لینک مقصد دکمه رو بفرست.\n"
-            "مثال: https://example.com"
+            "✅ محتوا دریافت شد.\n\n"
+            "🔗 حالا لینک مقصد دکمه رو بفرست."
         )
 
-    # -------- STEP 3: BUTTON URL --------
-
+    # STEP 3: URL
     elif step == BUTTON_URL:
-
         if not re.fullmatch(r"https?://\S+", text, re.I):
             await message.reply_text(
-                "❌ لینک معتبر نیست.\n"
-                "لطفاً لینک رو با https:// یا http:// بفرست."
+                "❌ لینک معتبر نیست. با https:// بفرست."
             )
             return
 
@@ -660,107 +532,75 @@ async def handle_message(
         await message.reply_text(
             "✏️ مرحله چهارم:\n\n"
             "اسم دلخواه دکمه شیشه‌ای رو وارد کن.\n\n"
-            "مثال:\n"
-            "🔗 ورود به سایت\n"
-            "📢 عضویت در کانال\n"
-            "🎁 دریافت هدیه"
+            "مثال: 🔗 ورود به سایت"
         )
 
-    # -------- STEP 4: BUTTON TEXT & SEND --------
-
+    # STEP 4: BUTTON TEXT AND SEND
     elif step == BUTTON_TEXT:
-
         button_name = text.strip()
 
         if not button_name:
-            await message.reply_text(
-                "❌ اسم دکمه نمی‌تونه خالی باشه."
-            )
+            await message.reply_text("اسم دکمه خالی است.")
             return
 
         if len(button_name) > 64:
             await message.reply_text(
-                "❌ اسم دکمه نباید بیشتر از ۶۴ کاراکتر باشه."
+                "اسم دکمه نباید بیشتر از ۶۴ کاراکتر باشد."
             )
             return
 
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    button_name,
-                    url=state["button_url"]
-                )
-            ]
+            [InlineKeyboardButton(
+                button_name,
+                url=state["button_url"]
+            )]
         ])
 
         try:
             if state.get("photo_id"):
-
                 sent = await context.bot.send_photo(
                     chat_id=state["channel_id"],
                     photo=state["photo_id"],
                     caption=state["post_text"] or None,
                     reply_markup=keyboard
                 )
-
             else:
-
                 sent = await context.bot.send_message(
                     chat_id=state["channel_id"],
                     text=state["post_text"],
                     reply_markup=keyboard
                 )
 
-            try:
-                await asyncio.to_thread(
-                    save_creation,
-                    uid,
-                    state["channel_id"],
-                    state["channel_title"],
-                    state["post_text"],
-                    state.get("photo_id"),
-                    state["button_url"],
-                    button_name,
-                    sent.message_id
-                )
-
-            except Exception:
-                logger.exception("Saving creation failed")
-
-                user_steps.pop(uid, None)
-
-                await message.reply_text(
-                    "⚠️ پست در کانال منتشر شد، اما ذخیره اطلاعات آن در دیتابیس ناموفق بود.\n"
-                    "بنابراین ممکن است در فهرست حذف پست نمایش داده نشود.",
-                    reply_markup=main_keyboard()
-                )
-                return
+            await asyncio.to_thread(
+                save_creation,
+                uid,
+                state["channel_id"],
+                state["channel_title"],
+                state["post_text"],
+                state.get("photo_id"),
+                state["button_url"],
+                button_name,
+                sent.message_id
+            )
 
             user_steps.pop(uid, None)
 
             await message.reply_text(
-                "✅ پست با موفقیت در کانال منتشر شد.\n\n"
-                f"🔘 اسم دکمه: {button_name}\n"
-                f"🔗 لینک: {state['button_url']}",
+                "✅ پست با موفقیت منتشر شد!\n\n"
+                f"🔘 نام دکمه: {button_name}",
                 reply_markup=main_keyboard()
             )
 
         except Exception:
             logger.exception("Post sending failed")
-
             await message.reply_text(
-                "❌ ارسال پست ناموفق بود.\n"
-                "دسترسی ارسال پست و محتوای ارسالی رو بررسی کن.\n\n"
-                "برای تلاش دوباره، دوباره اسم دکمه رو بفرست."
+                "❌ ارسال یا ذخیره پست ناموفق بود. دوباره تلاش کن."
             )
 
 
 # ================= ERROR HANDLER =================
 
-async def error_handler(
-    update: object,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def error_handler(update, context):
     logger.error(
         "Unhandled exception:",
         exc_info=context.error
@@ -770,31 +610,36 @@ async def error_handler(
 # ================= MAIN =================
 
 def main():
-    init_db()
+    try:
+        print("Connecting to PostgreSQL...", flush=True)
+        init_db()
+        print("Database connected!", flush=True)
 
-    app = Application.builder().token(BOT_TOKEN).build()
+        app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("cancel", cancel))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("cancel", cancel))
+        app.add_handler(CallbackQueryHandler(buttons))
 
-    app.add_handler(
-        CallbackQueryHandler(buttons)
-    )
-
-    app.add_handler(
-        MessageHandler(
-            (filters.TEXT | filters.PHOTO) & ~filters.COMMAND,
-            handle_message
+        app.add_handler(
+            MessageHandler(
+                (filters.TEXT | filters.PHOTO) & ~filters.COMMAND,
+                handle_message
+            )
         )
-    )
 
-    app.add_error_handler(error_handler)
+        app.add_error_handler(error_handler)
 
-    logger.info("Bot started")
+        print("Bot is running!", flush=True)
 
-    app.run_polling(
-        drop_pending_updates=True
-    )
+        app.run_polling(
+            drop_pending_updates=False,
+            allowed_updates=Update.ALL_TYPES
+        )
+
+    except Exception:
+        logger.exception("BOT START FAILED")
+        raise
 
 
 if __name__ == "__main__":
