@@ -6,11 +6,13 @@ import asyncio
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -19,6 +21,7 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,20 +33,20 @@ if not BOT_TOKEN or not DATABASE_URL:
     raise RuntimeError("BOT_TOKEN یا DATABASE_URL تنظیم نشده است")
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 logger = logging.getLogger(__name__)
 
 CHANNEL = "channel"
-POST_TEXT = "post_text"
+POST = "post"
 BUTTON_URL = "button_url"
 
 user_steps = {}
 
 
-# ---------------- DATABASE ----------------
+# =============== DATABASE ===============
 
 def get_db():
     return psycopg2.connect(
@@ -73,24 +76,20 @@ def init_db():
                     channel_id TEXT NOT NULL,
                     channel_title TEXT,
                     post_text TEXT,
+                    photo_file_id TEXT,
                     button_url TEXT,
                     message_id BIGINT,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
 
-    logger.info("Database initialized")
-
 
 def save_user(user):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO users (
-                    telegram_id,
-                    username,
-                    first_name
-                )
+                INSERT INTO users
+                (telegram_id, username, first_name)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (telegram_id)
                 DO UPDATE SET
@@ -103,26 +102,18 @@ def save_user(user):
             ))
 
 
-def save_creation(uid, channel_id, title, post, url, message_id):
+def save_creation(uid, channel_id, title, post, photo, url, message_id):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO creations (
-                    telegram_id,
-                    channel_id,
-                    channel_title,
-                    post_text,
-                    button_url,
-                    message_id
+                    telegram_id, channel_id, channel_title,
+                    post_text, photo_file_id, button_url, message_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (
-                uid,
-                str(channel_id),
-                title,
-                post,
-                url,
-                message_id
+                uid, str(channel_id), title,
+                post, photo, url, message_id
             ))
 
 
@@ -133,37 +124,31 @@ def get_user_count():
             return cur.fetchone()["total"]
 
 
-# ---------------- KEYBOARDS ----------------
+# =============== KEYBOARDS ===============
 
 def main_keyboard():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "🔘 ساخت دکمه شیشه‌ای",
-                callback_data="create"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "👤 کاربر",
-                callback_data="user"
-            )
-        ]
+        [InlineKeyboardButton(
+            "🔘 ساخت دکمه شیشه‌ای",
+            callback_data="create"
+        )],
+        [InlineKeyboardButton(
+            "👤 کاربر",
+            callback_data="user"
+        )]
     ])
 
 
 def back_keyboard():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "↩️ بازگشت به منو",
-                callback_data="home"
-            )
-        ]
+        [InlineKeyboardButton(
+            "↩️ بازگشت به منو",
+            callback_data="home"
+        )]
     ])
 
 
-# ---------------- START ----------------
+# =============== START ===============
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -172,17 +157,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await asyncio.to_thread(save_user, user)
     except Exception:
-        logger.exception("Could not save user")
+        logger.exception("Save user failed")
 
     await update.message.reply_text(
         "سلام 👋\n\n"
         "به ربات ساخت دکمه شیشه‌ای خوش اومدی.\n"
-        "از منوی زیر استفاده کن:",
+        "یکی از گزینه‌های زیر رو انتخاب کن:",
         reply_markup=main_keyboard()
     )
 
 
-# ---------------- CALLBACKS ----------------
+# =============== CALLBACKS ===============
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -200,15 +185,11 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "create":
-        user_steps[uid] = {
-            "step": CHANNEL
-        }
+        user_steps[uid] = {"step": CHANNEL}
 
         await query.message.reply_text(
             "🔗 لینک کانالی که می‌خوای پست داخلش ارسال بشه رو بفرست.\n\n"
-            "مثال:\n"
-            "@MyChannel\n"
-            "یا لینک کانال عمومی\n\n"
+            "مثال: @MyChannel\n\n"
             "حتماً خودت و بات باید در کانال ادمین باشید.",
             reply_markup=back_keyboard()
         )
@@ -217,7 +198,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             count = await asyncio.to_thread(get_user_count)
         except Exception:
-            logger.exception("User count error")
+            logger.exception("Count error")
             count = "نامشخص"
 
         await query.message.reply_text(
@@ -225,12 +206,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"آیدی: {uid}\n"
             f"نام: {user.first_name}\n"
             f"یوزرنیم: @{user.username or 'ندارد'}\n\n"
-            f"👥 تعداد کاربران ثبت‌شده: {count}",
+            f"👥 تعداد کاربران: {count}",
             reply_markup=main_keyboard()
         )
 
 
-# ---------------- CHANNEL LINK ----------------
+# =============== CHANNEL PARSER ===============
 
 def parse_channel(value):
     value = value.strip()
@@ -249,9 +230,9 @@ def parse_channel(value):
     return None
 
 
-# ---------------- MESSAGE HANDLER ----------------
+# =============== MESSAGE HANDLER ===============
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
 
@@ -260,15 +241,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = user_steps[uid]
     step = state["step"]
-    text = update.message.text.strip()
+    message = update.message
+
+    # STEP 1: CHANNEL
 
     if step == CHANNEL:
-
+        text = message.text.strip() if message.text else ""
         channel = parse_channel(text)
 
         if not channel:
-            await update.message.reply_text(
-                "❌ لینک کانال صحیح نیست.\n"
+            await message.reply_text(
+                "❌ لینک کانال معتبر نیست.\n"
                 "لطفاً آیدی عمومی کانال را بفرست."
             )
             return
@@ -276,25 +259,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             chat = await context.bot.get_chat(channel)
 
-            creator = await context.bot.get_chat_member(
-                chat.id,
-                uid
+            member = await context.bot.get_chat_member(
+                chat.id, uid
             )
 
-            if creator.status not in ("administrator", "creator"):
-                await update.message.reply_text(
-                    "❌ شما در این کانال ادمین نیستید."
+            if member.status not in ("administrator", "creator"):
+                await message.reply_text(
+                    "❌ شما باید ادمین کانال باشید."
                 )
                 return
 
             bot_member = await context.bot.get_chat_member(
-                chat.id,
-                context.bot.id
+                chat.id, context.bot.id
             )
 
             if bot_member.status not in ("administrator", "creator"):
-                await update.message.reply_text(
-                    "❌ ابتدا بات را در کانال ادمین کنید."
+                await message.reply_text(
+                    "❌ بات باید ادمین کانال باشد."
                 )
                 return
 
@@ -302,67 +283,95 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bot_member.status == "administrator"
                 and not bot_member.can_post_messages
             ):
-                await update.message.reply_text(
-                    "❌ بات اجازه ارسال پست در کانال را ندارد."
+                await message.reply_text(
+                    "❌ بات اجازه ارسال پست ندارد."
                 )
                 return
 
             state["channel_id"] = chat.id
             state["channel_title"] = chat.title or channel
-            state["step"] = POST_TEXT
+            state["step"] = POST
 
-            await update.message.reply_text(
+            await message.reply_text(
                 "✅ کانال تأیید شد.\n\n"
-                "📝 حالا متن پست را بفرست."
+                "📸 حالا عکس همراه متن پست یا فقط متن پست رو بفرست."
             )
 
         except Exception:
             logger.exception("Channel validation failed")
 
-            await update.message.reply_text(
-                "❌ بررسی کانال انجام نشد.\n"
-                "آیدی کانال و دسترسی ادمین بات را بررسی کن."
+            await message.reply_text(
+                "❌ بررسی کانال ناموفق بود.\n"
+                "آیدی کانال و دسترسی بات را بررسی کن."
             )
 
-    elif step == POST_TEXT:
+    # STEP 2: PHOTO OR TEXT
 
-        if not text:
-            await update.message.reply_text("متن پست خالی است.")
+    elif step == POST:
+
+        if message.photo:
+            state["photo_id"] = message.photo[-1].file_id
+            state["post_text"] = message.caption or ""
+
+        elif message.text:
+            state["photo_id"] = None
+            state["post_text"] = message.text.strip()
+
+        else:
+            await message.reply_text(
+                "❌ لطفاً عکس یا متن ارسال کن."
+            )
             return
 
-        state["post_text"] = text
         state["step"] = BUTTON_URL
 
-        await update.message.reply_text(
-            "🔗 حالا لینک مقصد دکمه شیشه‌ای را بفرست.\n\n"
+        await message.reply_text(
+            "🔗 حالا لینک مقصد دکمه شیشه‌ای رو بفرست.\n\n"
             "مثال:\n"
             "https://example.com"
         )
 
+    # STEP 3: BUTTON URL AND SEND
+
     elif step == BUTTON_URL:
 
+        text = message.text.strip() if message.text else ""
+
         if not re.fullmatch(r"https?://\S+", text, re.I):
-            await update.message.reply_text(
+            await message.reply_text(
                 "❌ لینک معتبر نیست.\n"
                 "لطفاً لینک را با https:// بفرست."
             )
             return
 
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "🔗 ورود به لینک",
-                    url=text
-                )
-            ]
+            [InlineKeyboardButton(
+                "🔗 ورود به لینک",
+                url=text
+            )]
         ])
 
         try:
-            sent = await context.bot.send_message(
-                chat_id=state["channel_id"],
-                text=state["post_text"],
-                reply_markup=keyboard
-            )
+            if state.get("photo_id"):
+                sent = await context.bot.send_photo(
+                    chat_id=state["channel_id"],
+                    photo=state["photo_id"],
+                    caption=state["post_text"] or None,
+                    reply_markup=keyboard
+                )
+
+            else:
+                if not state["post_text"]:
+                    await message.reply_text(
+                        "❌ متن پست خالی است."
+                    )
+                    return
+
+                sent = await context.bot.send_message(
+                    chat_id=state["channel_id"],
+                    text=state["post_text"],
+                    reply_markup=keyboard
+                )
 
             try:
                 await asyncio.to_thread(
@@ -371,32 +380,33 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     state["channel_id"],
                     state["channel_title"],
                     state["post_text"],
+                    state.get("photo_id"),
                     text,
                     sent.message_id
                 )
             except Exception:
-                logger.exception("Could not save creation")
-
-            await update.message.reply_text(
-                "✅ پست با موفقیت ارسال شد!\n\n"
-                "🔘 دکمه شیشه‌ای ساخته شد.\n"
-                "📤 می‌تونی پیام رو فوروارد کنی؛ "
-                "دکمه هم همراه پیام باقی می‌مونه.",
-                reply_markup=main_keyboard()
-            )
+                logger.exception("Save creation failed")
 
             user_steps.pop(uid, None)
 
-        except Exception:
-            logger.exception("Post sending failed")
+            await message.reply_text(
+                "✅ پست با موفقیت ارسال شد!\n\n"
+                "📸 عکس و متن ارسال شدند.\n"
+                "🔘 دکمه شیشه‌ای ساخته شد.\n"
+                "📤 با فوروارد معمولی پیام، دکمه هم همراهش می‌ماند.",
+                reply_markup=main_keyboard()
+            )
 
-            await update.message.reply_text(
-                "❌ ارسال پیام ناموفق بود.\n"
-                "دسترسی بات به ارسال پیام در کانال را بررسی کن."
+        except Exception:
+            logger.exception("Sending post failed")
+
+            await message.reply_text(
+                "❌ ارسال پست ناموفق بود.\n"
+                "دسترسی بات در کانال را بررسی کن."
             )
 
 
-# ---------------- CANCEL ----------------
+# =============== CANCEL ===============
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_steps.pop(update.effective_user.id, None)
@@ -407,7 +417,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ---------------- MAIN ----------------
+# =============== MAIN ===============
 
 def main():
     init_db()
@@ -421,12 +431,12 @@ def main():
 
     app.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_text
+            (filters.TEXT | filters.PHOTO) & ~filters.COMMAND,
+            handle_message
         )
     )
 
-    logger.info("Bot is running!")
+    logger.info("Bot started successfully")
 
     app.run_polling()
 
